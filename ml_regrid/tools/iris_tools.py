@@ -1,5 +1,7 @@
 from __future__ import (absolute_import, division, print_function)
 
+import numpy as np
+
 
 def transform_cube_by_masked_index(cube, masked_indx):
     """
