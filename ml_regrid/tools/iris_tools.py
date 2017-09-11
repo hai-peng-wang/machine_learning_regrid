@@ -3,6 +3,18 @@ from __future__ import (absolute_import, division, print_function)
 import numpy as np
 
 
+def besure_cube_has_continuous_bounds(cube):
+    """
+    Make sure that grid coordinates of both the source and grid cubes
+    must have contiguous bounds for the area-weighted regridding.
+    """
+    if not cube.coord('longitude').has_bounds():
+        cube.coord('longitude').guess_bounds()
+    if not cube.coord('latitude').has_bounds():
+        cube.coord('latitude').guess_bounds()
+    return cube
+
+
 def transform_cube_by_masked_index(cube, masked_indx):
     """
     Transform the input cube based the land or sea mark given
@@ -12,6 +24,7 @@ def transform_cube_by_masked_index(cube, masked_indx):
     new_cube.data = new_cube_data
     return new_cube
 
+
 def get_cube_grid_points(cube):
     """
     Return the (latitude, longitude) as (x, y) grids from an input cube.
@@ -19,6 +32,7 @@ def get_cube_grid_points(cube):
     x = cube.coord('latitude').points
     y = cube.coord('longitude').points
     return (x, y)
+
 
 def interp_by_scipy(src_data, src_grids, trg_grids, method='linear'):
     """
@@ -42,6 +56,7 @@ def interp_by_scipy(src_data, src_grids, trg_grids, method='linear'):
     drv_scipy_data = drv_scipy_data.reshape(
             len(trg_grids[0]), len(trg_grids[1]))
     return drv_scipy_data
+
 
 def two_stage_interp(cube_src, topo_tgt, lsm_src, lsm_tgt, method='linear'):
     """
