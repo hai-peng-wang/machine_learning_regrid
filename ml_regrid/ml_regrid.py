@@ -2,6 +2,26 @@ from sklearn.preprocessing import FunctionTransformer
 
 from test_grid import *
 
+
+def get_grid_vector(lat, lon):
+    """
+    Convert input lat, lon (nparray) into grid_mesh for scipy interpolate;
+    First step to prepare for scipy interpolation.
+    """
+    import numpy as np
+    lat_mesh, lon_mesh = np.meshgrid(lat, lon)
+    lat_vec = np.ravel(lat_mesh)
+    lon_vec = np.ravel(lon_mesh)
+    return lat_vec, lon_vec
+
+def get_grid_points(lat, lon):
+    """
+    Convert input lat, lon (nparray) into grid_points for scipy interpolate.
+    """
+    lat_vec, lon_vec = get_grid_vector(lat, lon)
+    grid_points = np.vstack((lat_vec, lon_vec)).T
+    return grid_points
+
 def interpolate_by_scipy_linear(src_data):
     """
     Use Scipy to interpolate input source data to target grid.
