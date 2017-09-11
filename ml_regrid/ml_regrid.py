@@ -79,9 +79,45 @@ def interpolate_by_scipy_nearest(src_data):
     tgt_data = scipy_interp(lat_tgt_vec, lon_tgt_vec)
     # Need reshape back to 2d
     tgt_data = tgt_data.reshape(len(lat_tgt), len(lon_tgt))
-
     return tgt_data
- 
+
+
+def regrid_cube_by_iris_scheme(param_cube, target_cube, scheme=None):
+    """
+    Use Area-weighted Scheme to regrid a specific cube from a cube list.
+    ------
+    Input:
+        param_cube: a cube for the specified paramerter;
+        target_cube: a cube with targetted grid
+        scheme: an iris scheme, i.e. 'linear', 'nearest', 'area_weighted'
+    Output:
+	drv_cube: the regridded cube (derived).
+    """
+    # claim the scheme
+    if scheme:
+	if scheme == 'linear':
+            regrid_scheme = iris.analysis.Linear()
+        elif scheme == 'nearest':
+            regrid_scheme = iris.analysis.Nearest()
+        elif scheme == 'area_weighted':
+            regrid_scheme = iris.analysis.AreaWeighted()
+        else:
+            raise ValueError(
+                 "The input scheme is not an option! \
+                 Only 'linear', 'nearest', 'area_weighted' are available.")
+    else:
+	raise ValueError("Need input a scheme!")
+
+    # Besure that the horizontal grid coordinates of both the source and
+    # grid cubes must have contiguous bounds.
+    besure_cube_has_continuous_bounds(param_cube)
+    besure_cube_has_continuous_bounds(target_cube)
+
+    # Use the given scheme to regrid
+    drv_cube = param_cube.regrid(target_cube, regrid_scheme)
+    return drv_cube
+
+
 topo_aps2 = empty_3d_cube_aps2(
     surface_alt_aps2_data, 'surface_altitude', 'm', 'm01s00i033')
 topo_aps3 = empty_3d_cube_aps3(
