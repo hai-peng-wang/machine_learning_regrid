@@ -1,10 +1,15 @@
 from __future__ import division, print_function
 
+import numpy as np
+
 import iris
 
 from iris.analysis._scipy_interpolate import _RegularGridInterpolator
 
-import numpy as np
+from ml_regrid.tools.iris_tools import (
+    besure_cube_has_continuous_bounds, get_land_sea_index,
+    transform_cube_by_masked_index)
+
 
 def regrid_cube_by_scheme(param_cube, target_cube, scheme=None):
     """

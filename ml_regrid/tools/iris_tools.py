@@ -15,6 +15,16 @@ def besure_cube_has_continuous_bounds(cube):
     return cube
 
 
+def get_land_sea_index(lsm_cube):
+    """
+    Return the land_indx and sea_indx from a given lsm_cube.
+    """
+    # We like the masked points to be false
+    sea_index = (lsm_cube.data != 0)
+    land_index = (lsm_cube.data == 0)
+    return land_index, sea_index
+
+
 def transform_cube_by_masked_index(cube, masked_indx):
     """
     Transform the input cube based the land or sea mark given
