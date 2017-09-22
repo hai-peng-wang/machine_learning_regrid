@@ -118,20 +118,20 @@ def regrid_cube_by_iris_scheme(param_cube, target_cube, scheme=None):
     return drv_cube
 
 
-topo_aps2 = empty_3d_cube_aps2(
-    surface_alt_aps2_data, 'surface_altitude', 'm', 'm01s00i033')
-topo_aps3 = empty_3d_cube_aps3(
-    surface_alt_aps3_data, 'surface_altitude', 'm', 'm01s00i033')
-lsm_aps2 = empty_3d_cube_aps2(
-    lsm_aps2_data, 'land_area_fraction', '1', )
-lsm_aps3 = empty_3d_cube_aps3(
-    lsm_aps3_data, 'land_area_fraction', '1')
-t_scn_aps3 = empty_3d_cube_aps3(
-    t_scn_aps3_data, 'air_temperature', 'K')
-dpt_scn_aps3 = empty_3d_cube_aps3(
-    dpt_scn_aps3_data, 'dew_point_temperature', 'K', 'm01s03i250')
-sfc_prs_aps3 = empty_3d_cube_aps3(
-    sfc_prs_aps3_data, 'air_pressure_at_sea_level', 'Pa')
+topo_tgt = empty_3d_cube_tgt(
+    surface_alt_tgt_data, 'surface_altitude', 'm')
+topo_src = empty_3d_cube_src(
+    surface_alt_src_data, 'surface_altitude', 'm')
+lsm_tgt = empty_3d_cube_tgt(
+    lsm_tgt_data, 'land_area_fraction', '1', )
+lsm_src = empty_3d_cube_src(
+    lsm_src_data, 'land_area_fraction', '1')
+t_scn_src = empty_3d_cube_src(
+    t_scn_src_data, 'air_temperature', 'K')
+dpt_scn_src = empty_3d_cube_src(
+    dpt_scn_src_data, 'dew_point_temperature', 'K')
+sfc_prs_src = empty_3d_cube_src(
+    sfc_prs_src_data, 'air_pressure_at_sea_level', 'Pa')
     
  X = t_scn.data
  transformer = FunctionTransformer(interpolate_by_scipy_linear)
