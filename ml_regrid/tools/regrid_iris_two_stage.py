@@ -60,7 +60,7 @@ def regrid_iris_two_stage(
         algorithm: iris regrid algorithms, which could be
                 'linear', 'nearest' and 'area-weighted'.
     Output:
-        drv_cube_land_aps2: an updated regridded cube with integrated data
+        drv_cube_land_tgt: an updated regridded cube with integrated data
                             of both land and sea although named by land.
     """
     iris_regrid_algorithm = {'linear': iris.analysis.Linear(),
@@ -77,9 +77,9 @@ def regrid_iris_two_stage(
     land_src_indx, sea_src_indx = get_land_sea_index(lsm_src)
     land_tgt_indx, sea_tgt_indx = get_land_sea_index(lsm_tgt)
 
-    # Mask the APS3 sea points
+    # Mask the src sea points
     cube_land_src = transform_cube_by_masked_index(cube_src, land_src_indx)
-    # Mask the APS3 land points
+    # Mask the src land points
     cube_sea_src = transform_cube_by_masked_index(cube_src, sea_src_indx)
 
     # Derive the cube_tgt from src, and tests on smale samples found that

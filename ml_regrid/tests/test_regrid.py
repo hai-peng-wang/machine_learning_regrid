@@ -15,18 +15,18 @@ import numpy as npfrom numpy.testing import (
 
 from scipy.interpolate import RegularGridInterpolator
 
-lsm_aps2_data = np.array(
+lsm_tgt_data = np.array(
         [[1., 0., 0.],
          [1., 1., 0.],
          [1., 1., 0.]])
 
-surface_alt_aps2_data = np.array(
+surface_alt_tgt_data = np.array(
         [[40., 0., 0.],
          [272.5, 49.5, 0.],
          [569., 139.375, 0.]])
 
-# For APS3, the index points lsm_aps3.data[821:827, 461:467], shape=(6, 6)
-lsm_aps3_data = np.array(
+# For src, the index points lsm_src.data[821:827, 461:467], shape=(6, 6)
+lsm_src_data = np.array(
       [[1, 1, 0, 0, 0, 0],
        [1, 1, 1, 0, 0, 0],
        [1, 1, 1, 1, 0, 0],
@@ -34,7 +34,7 @@ lsm_aps3_data = np.array(
        [1, 1, 1, 1, 0, 0],
        [1, 1, 1, 1, 0, 0]])
 
-surface_alt_aps3_data = np.array(
+surface_alt_src_data = np.array(
         [[30.79901695, 24.64077759, 0., 0., 0., 0.],
          [40.51713181, 57.62937927, 44.1620636, 0., 0., 0.],
          [61.04179001, 77.5438385, 68.0868454, 27.50967216, 0., 0.],
@@ -42,7 +42,7 @@ surface_alt_aps3_data = np.array(
          [500.52633667, 204.61886597, 96.57264709, 57.00541687, 0., 0.],
          [801.8571167, 337.81097412, 131.99372864, 66.28527832, 0., 0.]])
 
-t_scn_aps3_data = np.array(
+t_scn_src_data = np.array(
      [[300.0625, 299.1875, 300.859375, 300.4375, 300.640625, 300.8125],
       [300.734375, 303.546875, 300.828125, 300.53125, 300.578125, 300.796875],
       [302.0625, 301.078125, 300.703125, 299.90625, 300.640625, 300.71875],
@@ -50,7 +50,7 @@ t_scn_aps3_data = np.array(
       [297.078125, 298.875, 299.09375, 300.078125, 300.71875, 300.65625],
       [296.125, 297.875, 298.5625, 299.328125, 300.59375, 300.734375]])
 
-sfc_prs_aps3_data = np.array(
+sfc_prs_src_data = np.array(
       [[1212528., 1212361., 1212363., 1212647., 1212919., 1213073.],
        [1212195., 1211922., 1212181., 1212605., 1212950., 1213131.],
        [1212043., 1212038., 1212174., 1212588., 1212954., 1213181.],
@@ -58,7 +58,7 @@ sfc_prs_aps3_data = np.array(
        [1212454., 1212399., 1212434., 1212652., 1213012., 1213305.],
        [1212653., 1212496., 1212555., 1212774., 1213106., 1213395.]])
 
-dpt_scn_aps3_data = np.array(
+dpt_scn_src_data = np.array(
     [[293.515625, 294.03125, 294.5625, 294.53125, 294.171875, 294.],
      [293.1875, 290.59375, 292.15625, 294.078125, 294.09375, 293.6875],
      [292.59375, 291.71875, 291.390625, 291.890625, 293.828125, 293.640625],
@@ -67,9 +67,9 @@ dpt_scn_aps3_data = np.array(
      [292.328125, 291.4375, 291.875, 291.3125, 292.90625, 293.171875]])
 
 
-def empty_3d_cube_aps3(data, name=None, unit=None, stash=None, **kwargs):
+def empty_3d_cube_src(data, name=None, unit=None, stash=None, **kwargs):
     """
-    Prepare some iris cubes at APS3 grids for testing
+    Prepare some iris cubes at src grids for testing
     """
     if data is None:
         data = np.empty([6, 6])
@@ -98,9 +98,9 @@ def empty_3d_cube_aps3(data, name=None, unit=None, stash=None, **kwargs):
 
     return cube
 
-def empty_3d_cube_aps3(data, name=None, unit=None, stash=None, **kwargs):
+def empty_3d_cube_src(data, name=None, unit=None, stash=None, **kwargs):
     """
-    Prepare some iris cubes at APS3 grids for testing
+    Prepare some iris cubes at src grids for testing
     """
     if data is None:
         data = np.empty([6, 6])
@@ -168,39 +168,39 @@ def regrid_cube_by_scheme(param_cube, target_cube, scheme=None):
 class TestMdsRegrid(unittest.TestCase):
     def setUp(self):
         # Create sample cubes for testing
-        self.topo_aps2 = empty_3d_cube_aps2(
-            surface_alt_aps2_data, 'surface_altitude', 'm', 'm01s00i033')
-        self.topo_aps3 = empty_3d_cube_aps3(
-            surface_alt_aps3_data, 'surface_altitude', 'm', 'm01s00i033')
-        self.lsm_aps2 = empty_3d_cube_aps2(
-            lsm_aps2_data, 'land_area_fraction', '1', )
-        self.lsm_aps3 = empty_3d_cube_aps3(
-            lsm_aps3_data, 'land_binary_mask', '1')
-        self.t_scn_aps3 = empty_3d_cube_aps3(
-            t_scn_aps3_data, 'air_temperature', 'K')
-        self.sfc_prs_aps3 = empty_3d_cube_aps3(
-            sfc_prs_aps3_data, 'air_pressure_at_sea_level', 'Pa')
-        self.dpt_scn_aps3 = empty_3d_cube_aps3(
-            dpt_scn_aps3_data, 'dew_point_temperature', 'K', 'm01s03i250')
+        self.topo_tgt = empty_3d_cube_tgt(
+            surface_alt_tgt_data, 'surface_altitude', 'm', 'm01s00i033')
+        self.topo_src = empty_3d_cube_src(
+            surface_alt_src_data, 'surface_altitude', 'm', 'm01s00i033')
+        self.lsm_tgt = empty_3d_cube_tgt(
+            lsm_tgt_data, 'land_area_fraction', '1', )
+        self.lsm_src = empty_3d_cube_src(
+            lsm_src_data, 'land_binary_mask', '1')
+        self.t_scn_src = empty_3d_cube_src(
+            t_scn_src_data, 'air_temperature', 'K')
+        self.sfc_prs_src = empty_3d_cube_src(
+            sfc_prs_src_data, 'air_pressure_at_sea_level', 'Pa')
+        self.dpt_scn_src = empty_3d_cube_src(
+            dpt_scn_src_data, 'dew_point_temperature', 'K', 'm01s03i250')
 
         # For (x, y), it should be (lon, lat) accordingly
-        self.x_aps2 = self.topo_aps2.coord('longitude').points
-        self.y_aps2 = self.topo_aps2.coord('latitude').points
-        self.x_aps3 = self.topo_aps3.coord('longitude').points
-        self.y_aps3 = self.topo_aps3.coord('latitude').points
+        self.x_tgt = self.topo_tgt.coord('longitude').points
+        self.y_tgt = self.topo_tgt.coord('latitude').points
+        self.x_src = self.topo_src.coord('longitude').points
+        self.y_src = self.topo_src.coord('latitude').points
 
         # This Iris derived will be used in later
         self.drv_t_scn_iris = regrid_cube_by_scheme(
-                                self.t_scn_aps3, self.topo_aps2,
+                                self.t_scn_src, self.topo_tgt,
                                 scheme='linear')
         self.input_cubes = CubeList([])
         self.input_cubes.extend(
-            [self.dpt_scn_aps3, self.sfc_prs_aps3, self.t_scn_aps3])
+            [self.dpt_scn_src, self.sfc_prs_src, self.t_scn_src])
 
         self.in_grids = CubeList([])
-        self.in_grids.extend([self.topo_aps3, self.lsm_aps3])
+        self.in_grids.extend([self.topo_src, self.lsm_src])
         self.out_grids = CubeList([])
-        self.out_grids.extend([self.topo_aps2, self.lsm_aps2])
+        self.out_grids.extend([self.topo_tgt, self.lsm_tgt])
 
     def test_regrid_linear_iris(self):
         """
@@ -210,10 +210,10 @@ class TestMdsRegrid(unittest.TestCase):
         # This interpolation is in the original form.
         # The "interp_by_scipy" is an updated function based on it.
         scipy_interp = RegularGridInterpolator(
-            (self.x_aps3, self.y_aps3), self.t_scn_aps3.data, method='linear')
+            (self.x_src, self.y_src), self.t_scn_src.data, method='linear')
 
         t_scn_scipy_data = scipy_interp(
-            list(product(self.x_aps2, self.y_aps2))).reshape(3, 3)
+            list(product(self.x_tgt, self.y_tgt))).reshape(3, 3)
 
         self.assertAlmostEqual(t_scn_iris_data.any(),
                                t_scn_scipy_data.any())
@@ -225,7 +225,7 @@ class TestMdsRegrid(unittest.TestCase):
         """
         # Calculate Scipy two stage data
         drv_t_scn_scipy = two_stage_interp(
-            self.t_scn_aps3, self.topo_aps2, self.lsm_aps3, self.lsm_aps2)
+            self.t_scn_src, self.topo_tgt, self.lsm_src, self.lsm_tgt)
         scipy_results = drv_t_scn_scipy.data
         iris_results = self.drv_t_scn_iris.data
         assert_almost_equal(iris_results, scipy_results, decimal=2)

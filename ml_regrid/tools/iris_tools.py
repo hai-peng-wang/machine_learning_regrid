@@ -1,4 +1,7 @@
-from __future__ import (absolute_import, division, print_function)
+from __future__ import (absolute_
+
+
+import, division, print_function)
 
 import numpy as np
 
@@ -104,7 +107,7 @@ def two_stage_interp(cube_src, topo_tgt, lsm_src, lsm_tgt, method='linear'):
     land_grids_tgt = get_cube_grid_points(topo_land_tgt)
     sea_grids_tgt = get_cube_grid_points(topo_sea_tgt)
 
-    # Derive the cube_aps2 from aps3
+    # Derive the cube_tgt from src
     drv_cube_land_data = interp_by_scipy(
         cube_land_src.data, land_grids_src, land_grids_tgt, method=method)
 
