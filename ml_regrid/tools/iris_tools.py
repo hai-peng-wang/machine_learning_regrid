@@ -28,6 +28,18 @@ def get_land_sea_index(lsm_cube):
     return land_index, sea_index
 
 
+def produce_land_sea_index(lsm_cube):
+    """
+    Return the land_indx and sea_indx from a given lsm_cube.
+    Note: this method is not for mask; but for true value to be reserved
+    """
+    # Need to be true for the sea points
+    sea_index = (lsm_cube.data == 0)
+    # The land points
+    land_index = (lsm_cube.data != 0)
+    return land_index, sea_index
+
+
 def transform_cube_by_masked_index(cube, masked_indx):
     """
     Transform the input cube based the land or sea mark given
@@ -125,3 +137,39 @@ def two_stage_interp(cube_src, topo_tgt, lsm_src, lsm_tgt, method='linear'):
     # update the cube with integrated data
     drv_cube = update_cube_with_new_data(drv_cube_tgt, combined_data)
     return drv_cube
+
+
+def get_screen_param_from_cube_list(input_cubes, scn_param_name, mean=False):
+    """
+    Get the required screen parameter from the cube lists.
+    -----
+    Input:
+        input_cubes: a cube list
+        scn_param_name: a string of the required cube name
+        mean: define if cell_methods has mean
+    Output:
+        param_scn: a screen parameter cube
+    """
+    param_cube = None
+    for cube in input_cubes:
+        if not mean:
+            if scn_param_name in cube.name() and not cube.cell_methods:
+                if (not cube.coords('model_level_number') and
+                        not cube.coords('air_pressure') and
+                        not cube.coords('pressure')):
+                    param_cube = cube
+                    break
+        else:
+            # TODO: If the param not only has mean but other methods
+            if scn_param_name in cube.name() and cube.cell_methods:
+                if (not cube.coords('model_level_number') and
+                        not cube.coords('air_pressure') and
+                        not cube.coords('pressure')):
+                    param_cube = cube
+                    break
+    if param_cube is None:
+        raise ValueError('No such parameter {} available!'.
+                         format(scn_param_name))
+    else:
+        return param_cube
+    
