@@ -8,7 +8,7 @@ from iris.analysis._scipy_interpolate import _RegularGridInterpolator
 
 from ml_regrid.tools.iris_tools import (
     besure_cube_has_continuous_bounds, get_land_sea_index,
-    transform_cube_by_masked_index)
+    produce_land_sea_index, transform_cube_by_masked_index)
 
 
 def regrid_cube_by_scheme(param_cube, target_cube, scheme=None):
@@ -156,7 +156,130 @@ class IrisRegridder(object):
 
         return regridded_cubes
 
-    def _regrid_iris_coastline_correction(
+     def _regrid_iris_coastline_correction(
+            self, input_cubes, algorithm='linear'):
+        """
+        Use iris.analysis._interpolate for coastline correction and
+        then combine with Iris.regrid;
+        For 'area-weighted', use '_regrid_iris_two_stage' for 'cc'.
+         ------
+        Args:
+            input_cubes: the source input cubes
+            algorithm: a string descrbing the regridding scheme used,
+                       i.e. only "linear" and "nearest"
+        Returns:
+            The interpolated cube with coastline correction.
+        """
+        kafka_log, full_log = getLoggers()
+        # If the input is only a param_cube, turn it into CubeList
+        if not isinstance(input_cubes, iris.cube.CubeList):
+            input_cube_list = iris.cube.CubeList([])
+            input_cube_list.append(input_cubes)
+            input_cubes = input_cube_list
+
+        regridded_cubes = iris.cube.CubeList([])
+
+        if self.lsm_src is None or self.lsm_tgt is None:
+            raise ValueError("Need land/sea mask to initialize MdsRegridder!")
+
+        for cube in input_cubes:
+            full_log.info("Processing " + cube.name())
+            # Separate land/sea data
+            cube_src_land_data = np.where(
+                (self.lsm_src.data != 0), cube.data, np.nan)
+            cube_src_sea_data = np.where(
+                (self.lsm_src.data == 0), cube.data, np.nan)
+            # Prepare the lat, lon
+            lat_src, lon_src = get_cube_grid_points(self.topo_src)
+            lat_tgt, lon_tgt = get_cube_grid_points(self.topo_tgt)
+            # Prepare the interpolator
+            interpolator_land = _RegularGridInterpolator(
+                (lat_src, lon_src), cube_src_land_data, method=algorithm)
+            interpolator_sea = _RegularGridInterpolator(
+                (lat_src, lon_src), cube_src_sea_data, method=algorithm)
+            # Define the source/target grid
+            xv, yv = np.meshgrid(lon_src, lat_src)
+            grid_src = np.dstack((yv, xv))
+            xv, yv = np.meshgrid(lon_tgt, lat_tgt)
+            grid_tgt = np.dstack((yv, xv))
+            # Interpolate separately by land/sea
+            output_data_land = self._interp_masked_grid(
+                interpolator_land, grid_tgt)
+            output_data_sea = self._interp_masked_grid(
+                interpolator_sea, grid_tgt)
+            # Combine the data
+            combined_data = np.where(
+                (self.lsm_tgt.data == 0), output_data_sea, output_data_land)
+
+            # Since the combined_data has 'nan', where it is a point
+            # along the coastline. Find it and do correction
+            coast_pnt_bool = np.isnan(combined_data)
+            coast_points = grid_tgt[coast_pnt_bool]
+            coast_points_lsm = self.lsm_tgt.data[coast_pnt_bool]
+            lsm_tgt_land_indx, lsm_tgt_sea_indx = \
+                produce_land_sea_index(self.lsm_src)
+            # We need a coastline dataset to be stored
+            # and then replace the corresponding nan later on
+            coast_pnt_value = []
+            for index, latlon in enumerate(coast_points):
+                if coast_points_lsm[index] == 0:
+                    # the coast line point is sea point
+                    # Do the point interpolation, default method is 'linear'
+                    out_value = self._regrid_coastline_pnt(
+                        cube, grid_src, latlon, lsm_tgt_sea_indx, algorithm)
+                else:
+                    # the coast line point is land point
+                    out_value = self._regrid_coastline_pnt(
+                        cube, grid_src, latlon, lsm_tgt_land_indx, algorithm)
+                # Store the point value
+                coast_pnt_value.extend(out_value)
+            # Now need to replace those coastline points with value nan
+            assert len(combined_data[coast_pnt_bool]) == len(coast_pnt_value)
+            combined_data[coast_pnt_bool] = coast_pnt_value
+            drv_cube = create_derive_cube(cube, self.topo_tgt)
+            drv_cube.data = combined_data
+
+            regridded_cubes.append(drv_cube)
+
+        return regridded_cubes
+
+    def _regrid_coastline_pnt(
+            self, cube, grid, latlon, lsm_indx, algorithm='linear'):
+        """
+        Regrid the input point (latlon) on a grid
+        :param cube: input source cube
+        :param grid: the target grid
+        :param latlon: the input point [lat, lon]
+        :param lsm_indx: the bool index from land/sea mask
+        :param algorithm: the used algorithm
+        :return: the regridded value on the input point
+        """
+        # Generally, derived data will be valid if there are three points
+        output_pnt = griddata(
+            grid[lsm_indx], cube.data[lsm_indx], latlon, method=algorithm)
+        # There are scenario like only two or one sea points nearby, then
+        # the output will be 'nan'; use 'nearest' specifically like GFE does
+        # if output_pnt == np.nan: (this doesn't work)
+        if np.isnan(output_pnt):
+            output_pnt = griddata(
+                grid[lsm_indx], cube.data[lsm_indx], latlon, method='nearest')
+        return output_pnt
+
+    def _closest_points_index(self, point, grid):
+        """
+        Produce the bool index for node (lat, lon) on grid nodes
+        :param point: a grid point [lat, lon] not on the grid
+        :param grid: a source grid
+        :return: the bool value (index) on those nearest points to the point
+        """
+        deltas = np.abs(grid - point)
+        # the grid has shape (i, j, k) i.e. (8, 6, 2) for sample testing area
+        dist_2 = np.einsum('ijk,ijk->ij', deltas, deltas)
+        # Index be true if the distance is minimum
+        index_bool = (dist_2 == np.min(dist_2))
+        return index_bool
+      
+    def _regrid_iris_coastline_correction_deprecated(
             self, input_cubes, algorithm='linear'):
         """
         Use iris.analysis._interpolate for coastline correction and
