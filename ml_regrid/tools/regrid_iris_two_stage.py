@@ -193,10 +193,14 @@ class IrisRegridder(object):
             lat_src, lon_src = get_cube_grid_points(self.topo_src)
             lat_tgt, lon_tgt = get_cube_grid_points(self.topo_tgt)
             # Prepare the interpolator
+            # We need to extropolate the points outside bounds
+            # So set bounds_error=False, fill_value=None
             interpolator_land = _RegularGridInterpolator(
-                (lat_src, lon_src), cube_src_land_data, method=algorithm)
+                (lat_src, lon_src), cube_src_land_data, method=algorithm,
+                bounds_error=False, fill_value=None)
             interpolator_sea = _RegularGridInterpolator(
-                (lat_src, lon_src), cube_src_sea_data, method=algorithm)
+                (lat_src, lon_src), cube_src_sea_data, method=algorithm,
+                bounds_error=False, fill_value=None)
             # Define the source/target grid
             xv, yv = np.meshgrid(lon_src, lat_src)
             grid_src = np.dstack((yv, xv))
