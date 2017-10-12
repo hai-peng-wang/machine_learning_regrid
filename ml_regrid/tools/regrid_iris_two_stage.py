@@ -8,7 +8,7 @@ from iris.analysis._scipy_interpolate import _RegularGridInterpolator
 
 from ml_regrid.tools.iris_tools import (
     besure_cube_has_continuous_bounds, get_land_sea_index,
-    produce_land_sea_index, transform_cube_by_masked_index)
+    produce_land_sea_bool, transform_cube_by_masked_index)
 
 
 def regrid_cube_by_scheme(param_cube, target_cube, scheme=None):
@@ -113,6 +113,14 @@ class IrisRegridder(object):
         """
         self.src_topo = src_topo
         self.tgt_topo = tgt_topo
+        # Prepare the lat, lon
+        self.lat_src, self.lon_src = get_cube_grid_points(self.topo_src)
+        self.lat_tgt, self.lon_tgt = get_cube_grid_points(self.topo_tgt)
+        # Define the source/target grid
+        xv, yv = np.meshgrid(self.lon_src, self.lat_src)
+        self.grid_src = np.dstack((yv, xv))
+        xv, yv = np.meshgrid(self.lon_tgt, self.lat_tgt)
+        self.grid_tgt = np.dstack((yv, xv))
 
         # calculate dz cube for height adjustment
         self.drv_tgt_topo = regrid_cube_by_scheme(
@@ -123,10 +131,11 @@ class IrisRegridder(object):
             # Providing both lsm are available
             self.src_lsm = src_lsm
             self.tgt_lsm = tgt_lsm
-            self.src_lsm_land_indx, self.src_lsm_sea_indx = \
-                get_land_sea_index(self.src_lsm)
-            self.tgt_lsm_land_indx, self.tgt_lsm_sea_indx = \
-                get_land_sea_index(self.tgt_lsm)
+            # Need True/False index for each Land/Sea point
+            self.lsm_land_bool_src, self.lsm_sea_bool_src = \
+                produce_land_sea_bool(self.lsm_src)
+            self.lsm_land_bool_tgt, self.lsm_sea_bool_tgt = \
+                produce_land_sea_bool(self.lsm_tgt)
 
     def _regrid(self, input_cubes, algorithm='linear'):
         """
@@ -170,7 +179,7 @@ class IrisRegridder(object):
         Returns:
             The interpolated cube with coastline correction.
         """
-        kafka_log, full_log = getLoggers()
+        # kafka_log, full_log = getLoggers()
         # If the input is only a param_cube, turn it into CubeList
         if not isinstance(input_cubes, iris.cube.CubeList):
             input_cube_list = iris.cube.CubeList([])
@@ -184,33 +193,30 @@ class IrisRegridder(object):
 
         for cube in input_cubes:
             full_log.info("Processing " + cube.name())
+            # Need check if the input cube has the same shape of grid
+            if cube.shape != self.lsm_src.shape:
+                cube = cube.regrid(self.lsm_src, iris.analysis.Linear())
             # Separate land/sea data
             cube_src_land_data = np.where(
                 (self.lsm_src.data != 0), cube.data, np.nan)
             cube_src_sea_data = np.where(
                 (self.lsm_src.data == 0), cube.data, np.nan)
-            # Prepare the lat, lon
-            lat_src, lon_src = get_cube_grid_points(self.topo_src)
-            lat_tgt, lon_tgt = get_cube_grid_points(self.topo_tgt)
+
             # Prepare the interpolator
             # We need to extropolate the points outside bounds
             # So set bounds_error=False, fill_value=None
             interpolator_land = _RegularGridInterpolator(
-                (lat_src, lon_src), cube_src_land_data, method=algorithm,
-                bounds_error=False, fill_value=None)
+                (self.lat_src, self.lon_src), cube_src_land_data,
+                method=algorithm, bounds_error=False, fill_value=None)
             interpolator_sea = _RegularGridInterpolator(
-                (lat_src, lon_src), cube_src_sea_data, method=algorithm,
-                bounds_error=False, fill_value=None)
-            # Define the source/target grid
-            xv, yv = np.meshgrid(lon_src, lat_src)
-            grid_src = np.dstack((yv, xv))
-            xv, yv = np.meshgrid(lon_tgt, lat_tgt)
-            grid_tgt = np.dstack((yv, xv))
+                (self.lat_src, self.lon_src), cube_src_sea_data,
+                method=algorithm, bounds_error=False, fill_value=None)
+
             # Interpolate separately by land/sea
             output_data_land = self._interp_masked_grid(
-                interpolator_land, grid_tgt)
+                interpolator_land, self.grid_tgt)
             output_data_sea = self._interp_masked_grid(
-                interpolator_sea, grid_tgt)
+                interpolator_sea, self.grid_tgt)
             # Combine the data
             combined_data = np.where(
                 (self.lsm_tgt.data == 0), output_data_sea, output_data_land)
@@ -218,28 +224,30 @@ class IrisRegridder(object):
             # Since the combined_data has 'nan', where it is a point
             # along the coastline. Find it and do correction
             coast_pnt_bool = np.isnan(combined_data)
-            coast_points = grid_tgt[coast_pnt_bool]
-            coast_points_lsm = self.lsm_tgt.data[coast_pnt_bool]
-            lsm_tgt_land_indx, lsm_tgt_sea_indx = \
-                produce_land_sea_index(self.lsm_src)
-            # We need a coastline dataset to be stored
-            # and then replace the corresponding nan later on
-            coast_pnt_value = []
-            for index, latlon in enumerate(coast_points):
-                if coast_points_lsm[index] == 0:
-                    # the coast line point is sea point
-                    # Do the point interpolation, default method is 'linear'
-                    out_value = self._regrid_coastline_pnt(
-                        cube, grid_src, latlon, lsm_tgt_sea_indx, algorithm)
-                else:
-                    # the coast line point is land point
-                    out_value = self._regrid_coastline_pnt(
-                        cube, grid_src, latlon, lsm_tgt_land_indx, algorithm)
-                # Store the point value
-                coast_pnt_value.extend(out_value)
+            
+            # Now retrieving the points being both coastline and land
+            coast_pnt_bool_land = np.logical_and(
+                coast_pnt_bool, self.lsm_land_bool_tgt)
+            coast_points_land = self.grid_tgt[coast_pnt_bool_land]
+            # The way to pass an array of coast points to
+            # 'latlons' is much faster.
+            out_value_land = self._regrid_coastline_pnt(
+                cube, self.grid_src, coast_points_land,
+                self.lsm_land_bool_src, algorithm)
+
+            # Do the same with sea
+            coast_pnt_bool_sea = np.logical_and(
+                coast_pnt_bool, self.lsm_sea_bool_tgt)
+            coast_points_sea = self.grid_tgt[coast_pnt_bool_sea]
+            # More works (using Cython) need to optimize the function
+            out_value_sea = self._regrid_coastline_pnt(
+                cube, self.grid_src, coast_points_sea,
+                self.lsm_sea_bool_src, algorithm)
+
             # Now need to replace those coastline points with value nan
-            assert len(combined_data[coast_pnt_bool]) == len(coast_pnt_value)
-            combined_data[coast_pnt_bool] = coast_pnt_value
+            combined_data[coast_pnt_bool_land] = out_value_land
+            combined_data[coast_pnt_bool_sea] = out_value_sea
+            
             drv_cube = create_derive_cube(cube, self.topo_tgt)
             drv_cube.data = combined_data
 
@@ -248,25 +256,42 @@ class IrisRegridder(object):
         return regridded_cubes
 
     def _regrid_coastline_pnt(
-            self, cube, grid, latlon, lsm_indx, algorithm='linear'):
+            self, cube, grid, latlons, lsm_indx, algorithm='linear'):
         """
-        Regrid the input point (latlon) on a grid
+        Regrid the input point (latlons) on a grid
         :param cube: input source cube
         :param grid: the target grid
-        :param latlon: the input point [lat, lon]
+        :param latlons: the array of input point, each pnt [lat, lon]
         :param lsm_indx: the bool index from land/sea mask
-        :param algorithm: the used algorithm
+        :param algorithm: the used algorithm, i.e. 'linear' or 'nearest'
+        Note: For griddata, method can be above two or 'cubic'
         :return: the regridded value on the input point
         """
-        # Generally, derived data will be valid if there are three points
-        output_pnt = griddata(
-            grid[lsm_indx], cube.data[lsm_indx], latlon, method=algorithm)
-        # There are scenario like only two or one sea points nearby, then
-        # the output will be 'nan'; use 'nearest' specifically like GFE does
-        # if output_pnt == np.nan: (this doesn't work)
-        if np.isnan(output_pnt):
+        # We do not want it be done twice for 'nearest'
+        if algorithm == 'nearest':
             output_pnt = griddata(
-                grid[lsm_indx], cube.data[lsm_indx], latlon, method='nearest')
+                grid[lsm_indx], cube.data[lsm_indx], latlons, method=algorithm)
+        elif algorithm == 'linear':
+            # Generally, derived data will be valid if there are three points
+            output_pnt = griddata(
+                grid[lsm_indx], cube.data[lsm_indx], latlons, method=algorithm)
+
+            # There are scenario like only two or one sea points nearby, then
+            # the output is 'nan'; use 'nearest' specifically like GFE does
+            # if output_pnt == np.nan: (this doesn't work)
+            # The array.sum() will do the faster check on loop
+            if np.isnan(output_pnt.sum()):
+                # First create a 'nan' index
+                output_pnt_is_nan = np.isnan(output_pnt)
+                # Use the index for interp
+                output_pnt_nan = griddata(
+                    grid[lsm_indx], cube.data[lsm_indx],
+                    latlons[output_pnt_is_nan], method='nearest')
+                # Replace the nan
+                output_pnt[output_pnt_is_nan] = output_pnt_nan
+        else:
+            print('{} is not a supported method for griddata'.format(
+                  algorithm))
         return output_pnt
 
     def _closest_points_index(self, point, grid):
@@ -308,7 +333,15 @@ class IrisRegridder(object):
         if self.src_lsm is None or self.tgt_lsm is None:
             raise ValueError("Need land/sea mask to initialize IrisRegridder!")
 
+ 
+        lsm_land_indx_src, lsm_sea_indx_src = \
+            get_land_sea_index(self.lsm_src)
+        lsm_land_indx_tgt, lsm_sea_indx_tgt = \
+            get_land_sea_index(self.lsm_tgt)
+            
         for cube in input_cubes:
+            if cube.shape != self.lsm_src.shape:
+                cube = cube.regrid(self.lsm_src, iris.analysis.Linear())
             # Masked the source sea points
             cube_src_land = transform_cube_by_masked_index(
                 cube, self.src_lsm_land_indx)
@@ -322,10 +355,10 @@ class IrisRegridder(object):
             # Note: the grid_points need to be (x_points, y_points)
             # And x_points = longitude_points, y_points = latitude_pnt
             interpolator_land = _RegularGridInterpolator(
-                (lon_src, lat_src), cube_src_land.data, method=algorithm,
+                (self.lon_src, self.lat_src), cube_src_land.data, method=algorithm,
                 bounds_error=False, fill_value=None)
             interpolator_sea = _RegularGridInterpolator(
-                (lon_src, lat_src), cube_src_sea.data, method=algorithm,
+                (self.lon_src, self.lat_src), cube_src_sea.data, method=algorithm,
                 bounds_error=False, fill_value=None)
             # Define the target grid
             xv, yv = np.meshgrid(lat_tgt, lon_tgt)
@@ -340,11 +373,11 @@ class IrisRegridder(object):
 
             # interp by (masked) tgrid with land/sea
             output_data_land = _interp_masked_grid(
-                interpolator_land, tgrid_tgt)
+                interpolator_land, self.grid_tgt)
             output_data_sea = self._interp_masked_grid(
-                interpolator_sea, tgrid_tgt)
+                interpolator_sea, self.grid_tgt)
 
-            combined_data = np.where(self.tgt_lsm_land_indx,
+            combined_data = np.where(lsm_land_indx_tgt,
                                      output_data_sea, output_data_land)
 
             drv_cube = create_derive_cube(cube, self.tgt_topo)
