@@ -40,6 +40,18 @@ def produce_land_sea_index(lsm_cube):
     return land_index, sea_index
 
 
+def produce_land_sea_bool(lsm_cube):
+    """
+    Return the land_bool and sea_bool from a given lsm_cube.
+    Note: this method is not for mask; but for true value to be reserved
+    """
+    # Need to be true for the sea points
+    sea_bool = (lsm_cube.data == 0)
+    # The land points
+    land_bool = (lsm_cube.data != 0)
+    return land_bool, sea_bool
+
+
 def transform_cube_by_masked_index(cube, masked_indx):
     """
     Transform the input cube based the land or sea mark given
