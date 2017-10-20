@@ -10,6 +10,9 @@ from ml_regrid.tools.iris_tools import (
     besure_cube_has_continuous_bounds, get_land_sea_index,
     produce_land_sea_bool, transform_cube_by_masked_index)
 
+import scipy.spatial.qhull as qhull
+from scipy.interpolate import griddata
+
 
 def regrid_cube_by_scheme(param_cube, target_cube, scheme=None):
     """
@@ -99,6 +102,73 @@ def regrid_iris_two_stage(
     return drv_cube_land_tgt
 
 
+def interp_weights(xy, uv, d=2):
+    """
+    Interpolate source grid (xy) to target grid (uv).
+    This method will speedup scipy griddata (working for 2d).
+    -----
+    Input:
+        xy: the source grid with shape (x*y, 2);
+        uv: the target grid with shape (u*v, 2.
+    Output:
+        vertices: the vertices of the enclosing simplex;
+        weights: the weights for the interpolation
+    """
+    # 1.Triangulate the irregular grid coordinates
+    tri = qhull.Delaunay(xy)
+    # 2.For each point in the new grid, the triangulation is searched to
+    # find in which triangle does it lay
+    simplex = tri.find_simplex(uv)
+    # 3.The barycentric coordinates of each new grid point with respect
+    # to the vertices of the enclosing simplex are computed
+    vertices = np.take(tri.simplices, simplex, axis=0)
+    temp = np.take(tri.transform, simplex, axis=0)
+    delta = uv - temp[:, d]
+    bary = np.einsum('njk,nk->nj', temp[:, :d, :], delta)
+    
+    # The first three steps are identical for all interpolations, so if stored
+    # for each new grid point, the indices of the vertices of the enclosing
+    # simplex and the weights for the interpolation, one would minimize the
+    # amount of computations by a lot.
+    return vertices, np.hstack((bary, 1-bary.sum(axis=1, keepdims=True)))
+
+
+def pad(data):
+    """
+    Interpolate NaN values in a numpy array.
+    """
+    # building on Winston's answer
+    bad_indexes = np.isnan(data)
+    good_indexes = np.logical_not(bad_indexes)
+    good_data = data[good_indexes]
+    interpolated = np.interp(
+        bad_indexes.nonzero()[0], good_indexes.nonzero()[0], good_data)
+    data[bad_indexes] = interpolated
+    return data
+
+
+def interpolate(values, vtx, wts, fill_value=np.nan):
+    """
+    The last step to interpolate (replace the griddata), which is per case.
+    ------
+    Input:
+        values: the values on source grids;
+        vtx:  the vertices of the enclosing simplex;
+        wts: the weights for the interpolation
+    Output:
+        the flattened numpy array, which needs reshape(len(lon_tgt), len(lat))
+    """
+    # 4. An interpolated values is computed for that grid point, using the
+    # barycentric coordinates, and the values of the function at the vertices
+    # of the enclosing simplex.
+    ret = np.einsum('nj,nj->n', np.take(values, vtx), wts)
+    # There're cases of wts < 0 unfortunately, fill with nan
+    ret[np.any(wts < 0, axis=1)] = fill_value
+    # Interpolate a few 'nan'
+    ret = pad(ret)
+    return ret
+
+
 class IrisRegridder(object):
     """
     Regrid the cubes with a range of optional algorithms.
@@ -136,7 +206,41 @@ class IrisRegridder(object):
                 produce_land_sea_bool(self.lsm_src)
             self.lsm_land_bool_tgt, self.lsm_sea_bool_tgt = \
                 produce_land_sea_bool(self.lsm_tgt)
+                
+            # Prepare the coastline index for correction to speedup
+            [X, Y] = np.meshgrid(self.lon_src, self.lat_src)
+            [Xi, Yi] = np.meshgrid(self.lon_tgt, self.lat_tgt)
 
+            # The source grid need for CC interpolation
+            xy = np.zeros([X.shape[0] * X.shape[1], 2])
+            xy[:, 0] = Y.flatten()
+            xy[:, 1] = X.flatten()
+
+            # The tgt grid need for CC interpolation
+            uv = np.zeros([Xi.shape[0] * Xi.shape[1], 2])
+            uv[:, 0] = Yi.flatten()
+            uv[:, 1] = Xi.flatten()
+
+            # If only use uv coastline pnt
+            # Prepare some index for later CC
+            # Here we'd just use default 'linear' to interp for CC
+            combined_data = self._regrid_cube_by_lsm(self.lsm_src)
+            self.coast_pnt_bool = np.isnan(combined_data)# The reshape can be a better way?
+            uv_coast_pnt = uv[new_index].reshape(int(len(uv[new_index])/2), 2)
+
+            # Calculate the vertices and weights
+            self.vtx, self.wts = interp_weights(xy, uv_coast_pnt)
+
+            row_index = self.coast_pnt_bool
+            new_index = np.stack((row_index, row_index), -1)
+            new_index = new_index.flatten().reshape(
+                Xi.shape[0] * Xi.shape[1], 2)
+            # The reshape can be a better way?
+            uv_coast_pnt = uv[new_index].reshape(int(len(uv[new_index])/2), 2)
+
+            # Calculate the vertices and weights
+            self.vtx, self.wts = interp_weights(xy, uv_coast_pnt)
+      
     def _regrid(self, input_cubes, algorithm='linear'):
         """
         Method can be overridden to provide regridding of input cubes.
@@ -164,8 +268,113 @@ class IrisRegridder(object):
             regridded_cubes.append(drv_cube)
 
         return regridded_cubes
+    
+    def _regrid_cube_by_lsm(self, cube, algorithm='linear'):
+        """
+        Regrid the input cube by the land/sea index;
+        Inside, the coastline points will be specified as nan.
+        --------
+        Input:
+            cube: a cube for regridding;
+            algorithm: regridding algorithms used.
+        Output:
+            combined_data: a regridded data array with nan for next
+                           steop coastline correction.
+        """
+        # We do some calculation about the land/sea index and
+        # coastline points which can be used for all parameters
+        # being regridded
+        cube_src_sea_data = np.where(
+            (self.lsm_src.data == 0), cube.data, np.nan)
+        cube_src_land_data = np.where(
+            (self.lsm_src.data != 0), cube.data, np.nan)
 
-     def _regrid_iris_coastline_correction(
+        cube_src_land = cube.copy()
+        cube_src_land.data = cube_src_land_data
+
+        cube_src_sea = cube.copy()
+        cube_src_sea.data = cube_src_sea_data
+
+        cube_tgt_land = regrid_cube_by_scheme(
+            cube_src_land, self.topo_tgt, scheme=algorithm)
+        cube_tgt_sea = regrid_cube_by_scheme(
+            cube_src_sea, self.topo_tgt, scheme=algorithm)
+
+        combined_data = np.where(
+            (self.lsm_tgt.data == 0), cube_tgt_sea.data, cube_tgt_land.data)
+        return combined_data
+
+
+    def _regrid_iris_coastline_correction(
+            self, input_cubes, algorithm='linear'):
+        """
+        Use Scipy for coastline correction; the vertices and weights for
+        coastline points are calculated by 'interp_weights' only once;
+        then interpolate parameter data wise to replace the purposely
+        placed 'nan' values in the initial regridded results by Iris.
+        For 'area-weighted', use '_regrid_iris_two_stage' for 'cc'.
+         ------
+        Args:
+            input_cubes: the source input cubes
+            algorithm: a string descrbing the regridding scheme used,
+                       i.e. only "linear" and "nearest"
+        Returns:
+            The interpolated cube with coastline correction.
+        """
+        # If the input is only a param_cube, turn it into CubeList
+        if not isinstance(input_cubes, iris.cube.CubeList):
+            input_cube_list = iris.cube.CubeList([])
+            input_cube_list.append(input_cubes)
+            input_cubes = input_cube_list
+
+        regridded_cubes = iris.cube.CubeList([])
+
+        if self.lsm_src is None or self.lsm_tgt is None:
+            raise ValueError("Need land/sea mask to initialize MdsRegridder!")
+
+        for cube in input_cubes:
+            # Need check if the input cube has the same shape of grid
+            # For example, surface_downward_northward_stress has (1537, 2048)
+            # compared to lsm_src (1536, 2048); then Do Regrid first
+            if cube.shape != self.lsm_src.shape:
+                cube = cube.regrid(self.lsm_src, iris.analysis.Linear())
+
+            # If there are 'nan' in cube.data, don't do CC since there are
+            # parameters with lots of 'nan', which shouldn't be interpolated
+            # i.e. "Air_pressure_at_convective_cloud_top"
+            if (np.isnan(cube.data.sum()) or
+                    cube.name() in coastline_correction_exclude_list):
+                # It seems that 'nearest' is interpolating better for
+                # those params falling in this category
+                drv_cube = regrid_cube_by_scheme(cube, self.topo_tgt,
+                                                 scheme='nearest')
+                regridded_cubes.append(drv_cube)
+            # Do "cc" to cube
+            else:
+                # Get the combined the data with nan
+                combined_data = self._regrid_cube_by_lsm(cube, algorithm)
+
+                # All the 'nan' values are coastline points to be interpolated
+                # The first interpolation is using 'np.einnum' to speedup
+                output_coast_values = interpolate(
+                        cube.data, self.vtx, self.wts)
+
+                combined_data[self.coast_pnt_bool] = output_coast_values
+
+                # Occasionally, there could be 'nan'; pad it.
+                if np.isnan(combined_data.sum()):
+                    combined_data = pad(combined_data)
+
+                # This will just create a dummy regridded cube with all
+                # attributes plus cell_methods if exits
+                drv_cube = create_derive_cube(cube, self.topo_tgt)
+                drv_cube.data = combined_data
+
+                regridded_cubes.append(drv_cube)
+
+        return regridded_cubes
+    
+     def _regrid_iris_coastline_correction_deprecated(
             self, input_cubes, algorithm='linear'):
         """
         Use iris.analysis._interpolate for coastline correction and
@@ -307,86 +516,7 @@ class IrisRegridder(object):
         # Index be true if the distance is minimum
         index_bool = (dist_2 == np.min(dist_2))
         return index_bool
-      
-    def _regrid_iris_coastline_correction_deprecated(
-            self, input_cubes, algorithm='linear'):
-        """
-        Use iris.analysis._interpolate for coastline correction and
-        then combine with Iris.regrid;
-        For 'area-weighted', use '_regrid_iris_two_stage' for 'cc'.
-         ------
-        Args:
-            input_cubes: the source input cubes
-            algorithm: a string descrbing the regridding scheme used,
-                       i.e. only "linear" and "nearest"
-        Returns:
-            The interpolated cube with coastline correction.
-        """
-        # If the input is only a param_cube, turn it into CubeList
-        if not isinstance(input_cubes, iris.cube.CubeList):
-            input_cube_list = iris.cube.CubeList([])
-            input_cube_list.append(input_cubes)
-            input_cubes = input_cube_list
-
-        regridded_cubes = iris.cube.CubeList([])
-
-        if self.src_lsm is None or self.tgt_lsm is None:
-            raise ValueError("Need land/sea mask to initialize IrisRegridder!")
-
- 
-        lsm_land_indx_src, lsm_sea_indx_src = \
-            get_land_sea_index(self.lsm_src)
-        lsm_land_indx_tgt, lsm_sea_indx_tgt = \
-            get_land_sea_index(self.lsm_tgt)
-            
-        for cube in input_cubes:
-            if cube.shape != self.lsm_src.shape:
-                cube = cube.regrid(self.lsm_src, iris.analysis.Linear())
-            # Masked the source sea points
-            cube_src_land = transform_cube_by_masked_index(
-                cube, self.src_lsm_land_indx)
-            # Masked the source land points
-            cube_src_sea = transform_cube_by_masked_index(
-                cube, self.src_lsm_sea_indx)
-
-            lat_src, lon_src = get_cube_grid_points(src_topo)
-            lat_tgt, lon_tgt = get_cube_grid_points(tgt_topo)
-            # Define the interpolator for land and sea
-            # Note: the grid_points need to be (x_points, y_points)
-            # And x_points = longitude_points, y_points = latitude_pnt
-            interpolator_land = _RegularGridInterpolator(
-                (self.lon_src, self.lat_src), cube_src_land.data, method=algorithm,
-                bounds_error=False, fill_value=None)
-            interpolator_sea = _RegularGridInterpolator(
-                (self.lon_src, self.lat_src), cube_src_sea.data, method=algorithm,
-                bounds_error=False, fill_value=None)
-            # Define the target grid
-            xv, yv = np.meshgrid(lat_tgt, lon_tgt)
-            tgrid_tgt = np.dstack((yv, xv))
-
-            # Calc the tgrid with land/sea index
-            # By purposely using lsm for tgrid didn't make difference
-            # tgrid_tgt_land = _create_masked_tgrid(
-            #    self.tgt_lsm_land_indx, tgrid_tgt)
-            # tgrid_tgt_sea = _create_masked_tgrid(
-            #    self.tgt_lsm_sea_indx, tgrid_tgt)
-
-            # interp by (masked) tgrid with land/sea
-            output_data_land = _interp_masked_grid(
-                interpolator_land, self.grid_tgt)
-            output_data_sea = self._interp_masked_grid(
-                interpolator_sea, self.grid_tgt)
-
-            combined_data = np.where(lsm_land_indx_tgt,
-                                     output_data_sea, output_data_land)
-
-            drv_cube = create_derive_cube(cube, self.tgt_topo)
-            drv_cube.data = combined_data
-
-            regridded_cubes.append(drv_cube)
-
-        return regridded_cubes
-
+  
     def _create_masked_tgrid(self, masked_index, tgrid):
         """
         Create the target grid with masked index.
