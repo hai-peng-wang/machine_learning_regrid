@@ -367,7 +367,7 @@ class IrisRegridder(object):
 
                 # This will just create a dummy regridded cube with all
                 # attributes plus cell_methods if exits
-                drv_cube = create_derive_cube(cube, self.topo_tgt)
+                drv_cube = cube.regrid(self.topo_tgt, iris.analysis.Linear())
                 drv_cube.data = combined_data
 
                 regridded_cubes.append(drv_cube)
@@ -457,7 +457,7 @@ class IrisRegridder(object):
             combined_data[coast_pnt_bool_land] = out_value_land
             combined_data[coast_pnt_bool_sea] = out_value_sea
             
-            drv_cube = create_derive_cube(cube, self.topo_tgt)
+            drv_cube = cube.regrid(self.topo_tgt, iris.analysis.Linear())
             drv_cube.data = combined_data
 
             regridded_cubes.append(drv_cube)
